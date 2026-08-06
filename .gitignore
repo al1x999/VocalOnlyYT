@@ -1,0 +1,24 @@
+# Temporary audio files and separation outputs
+temp/
+*.wav
+*.mp3
+*.m4a
+
+# Python cache & virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+
+# AI Model weights cache (downloaded dynamically)
+server/models/*
+!server/models/.gitkeep
+
+# OS / IDE metadata
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.log
