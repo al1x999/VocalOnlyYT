@@ -2,6 +2,7 @@ import os
 import gc
 import shutil
 import threading
+import subprocess
 import sys
 from pathlib import Path
 from typing import Dict
@@ -70,11 +71,19 @@ def run_pipeline(url: str, video_id: str, quality: str = "fast", device: str = "
                 TASKS[clean_id] = {"status": "error", "progress": 0, "error": "Audio download failed"}
             return
 
-        # 2. Separate vocals
+        # 2. Separate vocals in an isolated worker process (guarantees 100% RAM release on Windows)
         with TASKS_LOCK:
             TASKS[clean_id] = {"status": "separating", "progress": 60, "error": None}
 
-        vocal_p, inst_p = separate_audio(raw_audio_file, out_dir, quality=quality, device_setting=device)
+        sep_script = BASE_DIR / "server" / "separator.py"
+        cmd = [sys.executable, str(sep_script), str(raw_audio_file), str(out_dir), quality, device]
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+        if proc.returncode != 0:
+            print(f"[Separator Subprocess Error] {proc.stderr}", flush=True)
+            with TASKS_LOCK:
+                TASKS[clean_id] = {"status": "error", "progress": 0, "error": "AI vocal separation failed"}
+            return
 
         # 3. Clean raw input file to save disk space
         try:
@@ -85,6 +94,8 @@ def run_pipeline(url: str, video_id: str, quality: str = "fast", device: str = "
 
         with TASKS_LOCK:
             TASKS[clean_id] = {"status": "ready", "progress": 100, "error": None}
+
+        gc.collect()
 
     except Exception as e:
         print(f"[Pipeline Error] {e}", flush=True)

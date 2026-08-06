@@ -128,10 +128,28 @@ def separate_audio(input_wav_path: Path, output_dir: Path, quality: str = "fast"
     sf.write(str(vocal_path), vocals.t().numpy(), model.samplerate)
     sf.write(str(no_vocal_path), instrumental.t().numpy(), model.samplerate)
 
-    # Free RAM / VRAM
-    del wav, sources, drums, bass, other, vocals, instrumental
+    # Instantly unload AI model & purge all RAM / VRAM
+    global LOADED_MODEL
+    del model, wav, sources, drums, bass, other, vocals, instrumental
+    LOADED_MODEL = None
+    gc.collect()
     gc.collect()
     if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+        try:
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()
+        except Exception:
+            pass
 
+    print("[AI Engine] Separation finished. Model unloaded & RAM/VRAM freed cleanly.", flush=True)
     return vocal_path, no_vocal_path
+
+
+if __name__ == "__main__":
+    if len(sys.argv) >= 3:
+        in_wav = Path(sys.argv[1])
+        out_d = Path(sys.argv[2])
+        q = sys.argv[3] if len(sys.argv) > 3 else "fast"
+        dev = sys.argv[4] if len(sys.argv) > 4 else "auto"
+        separate_audio(in_wav, out_d, quality=q, device_setting=dev)
+        sys.exit(0)
