@@ -1,6 +1,6 @@
 /**
- * YouTube Vocal Remover - Content Script
- * Auto-detects current YouTube video, processes vocals on demand via Ctrl+Shift+R or button click,
+ * YouTube Instrument Remover - Content Script
+ * Auto-detects YouTube video, removes instruments on demand via 'P' shortcut or button,
  * and plays sample-accurate synchronized vocal audio replacing original YouTube audio.
  */
 
@@ -19,7 +19,7 @@
   // Settings
   let qualitySetting = 'fast'; // fast (mdx_extra), balanced (htdemucs), high (htdemucs_ft)
   let deviceSetting = 'auto'; // auto, cuda, cpu
-  let shortcutSetting = 'Ctrl+Shift+R'; // Default shortcut
+  let shortcutSetting = 'P'; // Default shortcut: P
 
   let vocalsAudio = null;
 
@@ -89,7 +89,7 @@
             <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
             <line x1="12" y1="19" x2="12" y2="22"/>
           </svg>
-          <h4 class="yt-vocal-title">Vocal Remover</h4>
+          <h4 class="yt-vocal-title">Instrument Remover</h4>
         </div>
         <div class="yt-vocal-header-actions">
           <span class="yt-vocal-status-badge" id="yt-vocal-badge">Ready</span>
@@ -113,9 +113,9 @@
 
       <div class="yt-vocal-settings-panel" id="yt-vocal-settings">
         <div class="yt-vocal-setting-row">
-          <div class="yt-vocal-setting-label">AI Model Engine</div>
+          <div class="yt-vocal-setting-label">AI Engine Speed/Quality</div>
           <select class="yt-vocal-select" id="yt-vocal-quality-select">
-            <option value="fast" ${qualitySetting === 'fast' ? 'selected' : ''}>Fast (MDX-Net / mdx_extra)</option>
+            <option value="fast" ${qualitySetting === 'fast' ? 'selected' : ''}>Fast / Low-End PC (mdx_extra)</option>
             <option value="balanced" ${qualitySetting === 'balanced' ? 'selected' : ''}>Balanced (htdemucs)</option>
             <option value="high" ${qualitySetting === 'high' ? 'selected' : ''}>High Quality (htdemucs_ft)</option>
           </select>
@@ -123,10 +123,10 @@
 
         <div class="yt-vocal-setting-row">
           <div class="yt-vocal-setting-label">
-            <span>Process Shortcut</span>
+            <span>Shortcut Key</span>
             <span class="yt-vocal-shortcut-badge" id="yt-vocal-shortcut-badge">${shortcutSetting}</span>
           </div>
-          <input type="text" class="yt-vocal-input" id="yt-vocal-shortcut-input" value="${shortcutSetting}" placeholder="Click & press shortcut (e.g. P or Alt+V)">
+          <input type="text" class="yt-vocal-input" id="yt-vocal-shortcut-input" value="${shortcutSetting}" placeholder="Press any key (e.g. P or Alt+V)">
         </div>
 
         <div class="yt-vocal-setting-row">
@@ -137,11 +137,20 @@
             <option value="cpu" ${deviceSetting === 'cpu' ? 'selected' : ''}>Force CPU Mode</option>
           </select>
         </div>
+
+        <div class="yt-vocal-setting-row">
+          <div class="yt-vocal-setting-label">
+            <span>Disk Cache</span>
+            <span class="yt-vocal-shortcut-badge" id="yt-vocal-cache-badge">0 MB</span>
+          </div>
+          <button class="yt-vocal-clear-btn" id="yt-vocal-clear-cache-btn">🗑️ Clear Storage Cache</button>
+        </div>
       </div>
     `;
 
     document.body.appendChild(widget);
     attachUIEventListeners();
+    updateCacheSizeUI();
   }
 
   // Attach Event Listeners
@@ -152,12 +161,14 @@
     const qualitySelect = document.getElementById('yt-vocal-quality-select');
     const deviceSelect = document.getElementById('yt-vocal-device-select');
     const shortcutInput = document.getElementById('yt-vocal-shortcut-input');
+    const clearCacheBtn = document.getElementById('yt-vocal-clear-cache-btn');
 
     btn?.addEventListener('click', toggleProcessing);
 
     gearBtn?.addEventListener('click', () => {
       isSettingsOpen = !isSettingsOpen;
       settingsPanel?.classList.toggle('open', isSettingsOpen);
+      if (isSettingsOpen) updateCacheSizeUI();
     });
 
     qualitySelect?.addEventListener('change', (e) => {
@@ -169,6 +180,8 @@
       deviceSetting = e.target.value;
       saveSettings();
     });
+
+    clearCacheBtn?.addEventListener('click', clearCacheStorage);
 
     shortcutInput?.addEventListener('keydown', (e) => {
       e.preventDefault();
@@ -193,6 +206,35 @@
     });
   }
 
+  function updateCacheSizeUI() {
+    fetch(`${SERVER_URL}/cache_size`)
+      .then((res) => res.json())
+      .then((data) => {
+        const badge = document.getElementById('yt-vocal-cache-badge');
+        if (badge && data && typeof data.total_mb === 'number') {
+          badge.textContent = `${data.total_mb} MB`;
+        }
+      })
+      .catch(() => {});
+  }
+
+  function clearCacheStorage() {
+    const clearBtn = document.getElementById('yt-vocal-clear-cache-btn');
+    if (clearBtn) clearBtn.textContent = 'Clearing...';
+    fetch(`${SERVER_URL}/cleanup_all`, { method: 'POST' })
+      .then((res) => res.json())
+      .then((data) => {
+        if (clearBtn) clearBtn.textContent = `Cleared ${data.freed_mb || 0} MB!`;
+        updateCacheSizeUI();
+        setTimeout(() => {
+          if (clearBtn) clearBtn.textContent = '🗑️ Clear Storage Cache';
+        }, 2500);
+      })
+      .catch(() => {
+        if (clearBtn) clearBtn.textContent = 'Error clearing cache';
+      });
+  }
+
   // Keyboard Shortcut Listener
   function attachKeyboardShortcut() {
     window.addEventListener('keydown', (e) => {
@@ -211,7 +253,10 @@
 
       const pressedShortcut = keys.join('+');
 
-      if (pressedShortcut.toLowerCase() === shortcutSetting.toLowerCase() || (shortcutSetting === 'Ctrl+Shift+R' && e.ctrlKey && e.shiftKey && keyName === 'R')) {
+      const isMatch = pressedShortcut.toLowerCase() === shortcutSetting.toLowerCase() ||
+        (shortcutSetting.toUpperCase() === 'P' && keyName === 'P' && !e.ctrlKey && !e.altKey && !e.shiftKey);
+
+      if (isMatch) {
         e.preventDefault();
         toggleProcessing();
       }
@@ -264,7 +309,7 @@
         startSyncLoop();
       })
       .catch((err) => {
-        backendStatus = { status: 'error', progress: 0, error: 'Server offline (Run start_server.bat)' };
+        backendStatus = { status: 'error', progress: 0, error: 'Server offline' };
         updateUI();
       });
   }
@@ -380,7 +425,7 @@
                     }
                   })
                   .catch((err) => {
-                    console.warn('[Vocal Remover] Autoplay prevented vocal playback:', err);
+                    console.warn('[Instrument Remover] Autoplay prevented vocal playback:', err);
                     // Keep native video unmuted so user hears sound until interaction
                     if (video.muted) {
                       video.muted = false;
@@ -434,6 +479,28 @@
     }
   }
 
+  // Silent status check for pre-separated audio on page load/navigation
+  function checkCachedStatus() {
+    const vid = extractVideoId();
+    if (!vid || isEnabled) return;
+    fetch(`${SERVER_URL}/status/${vid}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data && data.status === 'ready') {
+          backendStatus = data;
+          const badge = document.getElementById('yt-vocal-badge');
+          const statusText = document.getElementById('yt-vocal-status-text');
+          if (!isEnabled && badge && statusText) {
+            badge.textContent = 'Cached';
+            badge.style.color = '#3b82f6';
+            badge.style.background = 'rgba(59, 130, 246, 0.15)';
+            statusText.textContent = `Vocal ready in cache! Press ${shortcutSetting} to play`;
+          }
+        }
+      })
+      .catch(() => {});
+  }
+
   // Update UI State
   function updateUI() {
     const badge = document.getElementById('yt-vocal-badge');
@@ -445,12 +512,21 @@
     if (!badge || !btn || !statusText) return;
 
     if (!isEnabled) {
-      badge.textContent = 'Ready';
-      badge.style.color = '#94a3b8';
-      badge.style.background = 'rgba(148, 163, 184, 0.15)';
-      btn.innerHTML = `<span>🎵 Remove Instrumental (${shortcutSetting})</span>`;
-      if (progressBar) progressBar.style.display = 'none';
-      statusText.textContent = `Press ${shortcutSetting} to isolate vocals`;
+      if (backendStatus.status === 'ready') {
+        badge.textContent = 'Cached';
+        badge.style.color = '#3b82f6';
+        badge.style.background = 'rgba(59, 130, 246, 0.15)';
+        btn.innerHTML = `<span>🎵 Play Vocals (${shortcutSetting})</span>`;
+        if (progressBar) progressBar.style.display = 'none';
+        statusText.textContent = `Vocal ready in cache! Press ${shortcutSetting} to play`;
+      } else {
+        badge.textContent = 'Ready';
+        badge.style.color = '#94a3b8';
+        badge.style.background = 'rgba(148, 163, 184, 0.15)';
+        btn.innerHTML = `<span>🎵 Remove Instrumental (${shortcutSetting})</span>`;
+        if (progressBar) progressBar.style.display = 'none';
+        statusText.textContent = `Press ${shortcutSetting} to isolate vocals`;
+      }
       return;
     }
 
@@ -471,7 +547,7 @@
       if (progressFill) progressFill.style.width = '65%';
       statusText.textContent = 'Removing instrumental with AI...';
     } else if (backendStatus.status === 'ready') {
-      badge.textContent = 'Vocal Only';
+      badge.textContent = 'Active';
       badge.style.color = '#22c55e';
       badge.style.background = 'rgba(34, 197, 94, 0.15)';
       btn.innerHTML = '<span>✅ Vocals Active (Click to Stop)</span>';
@@ -504,6 +580,7 @@
       stopProcessing();
       findVideoElement();
       injectWidget();
+      checkCachedStatus();
     }
   }
 
@@ -513,6 +590,7 @@
     injectWidget();
     attachKeyboardShortcut();
     findVideoElement();
+    checkCachedStatus();
 
     const observer = new MutationObserver(() => {
       if (location.href !== lastUrl) {

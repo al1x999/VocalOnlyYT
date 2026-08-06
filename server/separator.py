@@ -18,19 +18,27 @@ LOADED_MODEL = None
 CURRENT_DEVICE = None
 
 
-def get_device():
+def get_device(target: str = "auto"):
     """Detects available hardware acceleration (CUDA GPU vs CPU)."""
     global CURRENT_DEVICE
+    import torch
+
+    if target == "cpu":
+        threads = max(1, (os.cpu_count() or 4) // 2)
+        torch.set_num_threads(threads)
+        return torch.device("cpu")
+    elif target == "cuda" and torch.cuda.is_available():
+        return torch.device("cuda")
+
     if CURRENT_DEVICE is not None:
         return CURRENT_DEVICE
 
-    import torch
     if torch.cuda.is_available():
         CURRENT_DEVICE = torch.device("cuda")
     elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
         CURRENT_DEVICE = torch.device("mps")
     else:
-        # Multi-threaded CPU fallback
+        # Multi-threaded CPU fallback capped to prevent 100% thread starvation
         threads = max(1, (os.cpu_count() or 4) // 2)
         torch.set_num_threads(threads)
         CURRENT_DEVICE = torch.device("cpu")
@@ -38,17 +46,18 @@ def get_device():
     return CURRENT_DEVICE
 
 
-def load_separator_model(model_name: str = "mdx_extra"):
+def load_separator_model(model_name: str = "mdx_extra", target_device: str = "auto"):
     """Loads Demucs / MDX-Net model lazily onto target device."""
     global LOADED_MODEL
-    if LOADED_MODEL is not None:
+    if LOADED_MODEL is not None and getattr(LOADED_MODEL, "_model_name", None) == model_name:
         return LOADED_MODEL
 
-    device = get_device()
-    print(f"[AI Engine] Loading '{model_name}' on {device}...", flush=True)
+    device = get_device(target_device)
+    print(f"[AI Engine] Loading '{model_name}' on {device} (Low-Resource Mode)...", flush=True)
 
     from demucs.pretrained import get_model
     model = get_model(name=model_name)
+    model._model_name = model_name
     model.to(device)
     model.eval()
 
@@ -56,10 +65,10 @@ def load_separator_model(model_name: str = "mdx_extra"):
     return LOADED_MODEL
 
 
-def separate_audio(input_wav_path: Path, output_dir: Path) -> Tuple[Path, Path]:
+def separate_audio(input_wav_path: Path, output_dir: Path, quality: str = "fast", device_setting: str = "auto") -> Tuple[Path, Path]:
     """
     Separates full audio WAV file into vocals.wav and instrumental.wav.
-    Preserves human voice quality, harmony, reverb, and stereo imaging.
+    Optimized for low GPU/CPU consumption and fast processing on low-end PCs.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     vocal_path = output_dir / "vocals.wav"
@@ -73,16 +82,36 @@ def separate_audio(input_wav_path: Path, output_dir: Path) -> Tuple[Path, Path]:
     from demucs.apply import apply_model
     from demucs.audio import AudioFile
 
-    device = get_device()
-    model = load_separator_model("mdx_extra")
+    # Quality preset mapping
+    if quality == "high":
+        model_name = "htdemucs_ft"
+        shifts = 1
+    elif quality == "balanced":
+        model_name = "htdemucs"
+        shifts = 0
+    else: # fast (default)
+        model_name = "mdx_extra"
+        shifts = 0
 
-    print(f"[AI Engine] Separating audio: {input_wav_path.name}", flush=True)
+    device = get_device(device_setting)
+    model = load_separator_model(model_name, device_setting)
+
+    print(f"[AI Engine] Separating audio: {input_wav_path.name} (Quality: {quality}, Shifts: {shifts}, Device: {device})", flush=True)
     wav = AudioFile(input_wav_path).read(streams=0, samplerate=model.samplerate, channels=model.audio_channels)
     ref = wav.mean(0)
     wav = (wav - ref.mean()) / ref.std()
 
+    use_autocast = device.type == "cuda"
+
     with torch.no_grad():
-        sources = apply_model(model, wav[None].to(device), shifts=1, split=True, overlap=0.25)[0]
+        if use_autocast:
+            try:
+                with torch.cuda.amp.autocast():
+                    sources = apply_model(model, wav[None].to(device), shifts=shifts, split=True, overlap=0.25)[0]
+            except Exception:
+                sources = apply_model(model, wav[None].to(device), shifts=shifts, split=True, overlap=0.25)[0]
+        else:
+            sources = apply_model(model, wav[None].to(device), shifts=shifts, split=True, overlap=0.25)[0]
 
     sources = sources * ref.std() + ref.mean()
 

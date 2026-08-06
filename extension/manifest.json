@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "YouTube Vocal Remover",
+  "name": "YouTube Instrument Remover",
   "version": "2.0.0",
-  "description": "Removes instrumental/music from YouTube videos in 1 click or Ctrl+Shift+R shortcut.",
+  "description": "Removes instrumental/music from YouTube videos in 1 click or P shortcut.",
   "permissions": [
     "activeTab",
     "storage"

@@ -22,7 +22,7 @@ TEMP_SEP_DIR.mkdir(parents=True, exist_ok=True)
 from server.downloader import download_audio_only
 from server.separator import separate_audio, get_device
 
-app = FastAPI(title="YouTube Vocal Remover Backend", version="2.0.0")
+app = FastAPI(title="YouTube Instrument Remover Backend", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -39,6 +39,8 @@ TASKS: Dict[str, dict] = {}
 class ProcessRequest(BaseModel):
     url: str
     video_id: str
+    quality: str = "fast"
+    device: str = "auto"
 
 
 def sanitize_id(vid: str) -> str:
@@ -46,7 +48,7 @@ def sanitize_id(vid: str) -> str:
     return cleaned if cleaned else "default_video"
 
 
-def run_pipeline(url: str, video_id: str):
+def run_pipeline(url: str, video_id: str, quality: str = "fast", device: str = "auto"):
     clean_id = sanitize_id(video_id)
     out_dir = TEMP_SEP_DIR / clean_id
     vocal_file = out_dir / "vocals.wav"
@@ -72,7 +74,7 @@ def run_pipeline(url: str, video_id: str):
         with TASKS_LOCK:
             TASKS[clean_id] = {"status": "separating", "progress": 60, "error": None}
 
-        vocal_p, inst_p = separate_audio(raw_audio_file, out_dir)
+        vocal_p, inst_p = separate_audio(raw_audio_file, out_dir, quality=quality, device_setting=device)
 
         # 3. Clean raw input file to save disk space
         try:
@@ -96,7 +98,11 @@ def process_video(req: ProcessRequest):
     with TASKS_LOCK:
         if clean_id not in TASKS or TASKS[clean_id]["status"] == "error":
             TASKS[clean_id] = {"status": "queued", "progress": 10, "error": None}
-            thread = threading.Thread(target=run_pipeline, args=(req.url, req.video_id), daemon=True)
+            thread = threading.Thread(
+                target=run_pipeline,
+                args=(req.url, req.video_id, req.quality, req.device),
+                daemon=True,
+            )
             thread.start()
 
     return {"status": "started", "video_id": clean_id}
@@ -128,6 +134,34 @@ def get_vocals_audio(video_id: str):
             "Cache-Control": "no-cache",
         },
     )
+
+
+def get_dir_size_mb(path: Path) -> float:
+    total_bytes = 0
+    if path.exists():
+        for p in path.rglob("*"):
+            if p.is_file():
+                total_bytes += p.stat().st_size
+    return round(total_bytes / (1024 * 1024), 2)
+
+
+@app.get("/cache_size")
+def get_cache_size():
+    sep_size = get_dir_size_mb(TEMP_SEP_DIR)
+    audio_size = get_dir_size_mb(TEMP_AUDIO_DIR)
+    return {"total_mb": round(sep_size + audio_size, 2)}
+
+
+@app.post("/cleanup_all")
+def cleanup_all_cache():
+    initial_size = get_dir_size_mb(TEMP_SEP_DIR) + get_dir_size_mb(TEMP_AUDIO_DIR)
+    shutil.rmtree(TEMP_SEP_DIR, ignore_errors=True)
+    shutil.rmtree(TEMP_AUDIO_DIR, ignore_errors=True)
+    TEMP_SEP_DIR.mkdir(parents=True, exist_ok=True)
+    TEMP_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+    with TASKS_LOCK:
+        TASKS.clear()
+    return {"status": "cleaned", "freed_mb": round(initial_size, 2)}
 
 
 @app.post("/cleanup/{video_id}")
