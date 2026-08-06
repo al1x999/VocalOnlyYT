@@ -1,8 +1,6 @@
 import os
 import gc
 import sys
-import torch
-import soundfile as sf
 from pathlib import Path
 from typing import Dict, Tuple
 
@@ -20,12 +18,13 @@ LOADED_MODEL = None
 CURRENT_DEVICE = None
 
 
-def get_device() -> torch.device:
+def get_device():
     """Detects available hardware acceleration (CUDA GPU vs CPU)."""
     global CURRENT_DEVICE
     if CURRENT_DEVICE is not None:
         return CURRENT_DEVICE
 
+    import torch
     if torch.cuda.is_available():
         CURRENT_DEVICE = torch.device("cuda")
     elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
@@ -69,11 +68,13 @@ def separate_audio(input_wav_path: Path, output_dir: Path) -> Tuple[Path, Path]:
     if vocal_path.exists() and no_vocal_path.exists():
         return vocal_path, no_vocal_path
 
-    device = get_device()
-    model = load_separator_model("mdx_extra")
-
+    import torch
+    import soundfile as sf
     from demucs.apply import apply_model
     from demucs.audio import AudioFile
+
+    device = get_device()
+    model = load_separator_model("mdx_extra")
 
     print(f"[AI Engine] Separating audio: {input_wav_path.name}", flush=True)
     wav = AudioFile(input_wav_path).read(streams=0, samplerate=model.samplerate, channels=model.audio_channels)
